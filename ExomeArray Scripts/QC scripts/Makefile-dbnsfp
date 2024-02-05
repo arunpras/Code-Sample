@@ -1,0 +1,29 @@
+##########################################################################################
+# Written by Arun Manoharan
+# This script calls the commands for the variant annotation
+# It calls the dbNSFP program version 2
+# Start in /gnet/is2/research/bioinfo/HumGenet/immuno/sle/exomearray_sle
+# To call particular headers use make -f <Makefile name> <header>
+##########################################################################################
+
+#Generate the SNP file in the input format that dbnsfp understands
+infiles:
+	cat ../QC/allexome.bim| awk '$$1<23{print $$1,$$4;}' > allexome.in
+	cat ../QC/allexome.bim| awk '$$1==23{$$1="X";print $$1,$$4;}' >> allexome.in
+	cat ../QC/allexome.bim| awk '$$1==24{$$1="Y";print $$1,$$4;}' >> allexome.in
+
+# call dbnsfp
+dbnsfp:
+	cd /gne/research/sandbox/manohara/dbNSFP2;java search_dbNSFP20 -i /gnet/is2/research/bioinfo/HumGenet/immuno/sle/exomearray_sle/dbnsfp/allexome.in -o /gnet/is2/research/bioinfo/HumGenet/immuno/sle/exomearray_sle/dbnsfp/allexome.out; cd /gnet/is2/research/bioinfo/HumGenet/immuno/sle/exomearray_sle/dbnsfp;
+
+#remove special characters from the output file
+clean-output:
+	sed -i -e "s/'//g" allexome.out
+	sed -i -e "s/#//g" allexome.out
+	sed -i -e 's/"//g' allexome.out
+
+# generate the output in the format required
+call-consolidation:
+	./consolidateResults.R
+
+################################################################################################

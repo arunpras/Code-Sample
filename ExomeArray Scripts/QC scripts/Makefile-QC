@@ -1,0 +1,244 @@
+##########################################################################################
+# Written by Arun Manoharan
+# This script calls the QC commands for the exome array
+# It takes in the raw plink genotype files and performs sample and SNP QC
+# It calls the association tests and finally plots the genome-wide association results
+# Start in /gnet/is2/research/bioinfo/HumGenet/immuno/sle/exomearray_sle
+# To call particular headers use make -f <Makefile name> <header>
+##########################################################################################
+
+# Set variables
+project = QC/SLEexome
+project1 = SLEexome
+Rscriptsdir = scripts/R_scripts
+Perlscriptsdir = scripts/perl_scripts
+
+# remove failed SNPs: 50% missing genotypes
+fsrm:
+	plink --noweb --bfile $(project) --geno 0.5 --allow-no-sex --make-bed --out $(project).fsrm
+
+# calculate missing rates
+missing:
+	plink --noweb --bfile $(project).fsrm --missing --allow-no-sex --out $(project).missing
+	$(Rscriptsdir)/missingness.R -i $(project).missing.imiss -l $(project).missing.lmiss -s 0.05 -p 0.1 -o $(project).ms
+	plink --noweb --bfile $(project).fsrm --extract $(project).ms.snp.keep.txt --keep $(project).ms.samp.keep.txt --make-bed --out $(project).missing-removed
+
+# Remove monomorphic SNPs
+remove-monomorphic:
+	plink --bfile $(project).missing-removed --freq --out $(project).missing-removed
+	cat $(project).missing-removed.bim| awk '$$5==0 ||$$6==0{print $2;}' > $(project).singlegeno-snps.txt
+	cat $(project).missing-removed.frq| awk '$$5==0 {print $2;}' > $(project).monomorphic-snps.txt
+	plink --bfile $(project).missing-removed --exclude $(project).monomorphic-snps.txt --make-bed --out $(project).monomorphic-removed
+
+# <>EUR.keep was obtained by running admixture on all data and selecting samples with European ancestry >0.7 
+# split the population into European, African, Asian and Others based on admixture result in Makefile-admix file
+splitPop:
+	plink --noweb --bfile $(project).monomorphic-removed --keep $(project).EUR.keep --make-bed --out $(project).EUR
+	plink --noweb --bfile $(project).monomorphic-removed --keep $(project).AFR.keep --make-bed --out $(project).AFR
+	plink --noweb --bfile $(project).monomorphic-removed --keep $(project).ASN.keep --make-bed --out $(project).ASN
+	plink --noweb --bfile $(project).monomorphic-removed --keep $(project).Others.keep --make-bed --out $(project).Others
+
+# Remove samples failing heterozygosity
+inbrd:
+	plink --bfile $(project).EUR    --het --out  $(project).EUR
+	plink --bfile $(project).AFR    --het --out  $(project).AFR
+	plink --bfile $(project).ASN    --het --out  $(project).ASN
+	plink --bfile $(project).Others --het --out  $(project).Others
+	$(Rscriptsdir)/heterozygosity.R  -h $(project).EUR.het    -s 4 -o $(project).EUR
+	$(Rscriptsdir)/heterozygosity.R  -h $(project).AFR.het    -s 4 -o $(project).AFR
+	$(Rscriptsdir)/heterozygosity.R  -h $(project).ASN.het    -s 4 -o $(project).ASN
+	$(Rscriptsdir)/heterozygosity.R  -h $(project).Others.het -s 4 -o $(project).Others
+	plink --bfile $(project).EUR     --remove $(project).EUR.het.samp.rm.txt    --make-bed --out $(project).EUR.het-removed
+	plink --bfile $(project).AFR     --remove $(project).AFR.het.samp.rm.txt    --make-bed --out $(project).AFR.het-removed
+	plink --bfile $(project).ASN     --remove $(project).ASN.het.samp.rm.txt    --make-bed --out $(project).ASN.het-removed
+	plink --bfile $(project).Others  --remove $(project).Others.het.samp.rm.txt --make-bed --out $(project).Others.het-removed
+	
+
+# calculate minor allele frequency of SNPs in case and controls
+# Only pull SNPs with minor allele frequency > 0.05
+maf:
+	plink --noweb --bfile $(project).EUR --freq --out $(project).EUR.maf --allow-no-sex
+	awk '$$5 >= 0.05 && !/SNP/ {print $$2}' $(project).EUR.maf.frq > QC/maf0.05.rsid
+
+# pull common snps data for IBD and PCA calculations
+pullcommon: 
+	plink --noweb --bfile $(project).EUR.het-removed    --extract QC/maf0.05.rsid --make-bed --out $(project).EUR.common
+	plink --noweb --bfile $(project).AFR.het-removed    --extract QC/maf0.05.rsid --make-bed --out $(project).AFR.common
+	plink --noweb --bfile $(project).ASN.het-removed    --extract QC/maf0.05.rsid --make-bed --out $(project).ASN.common
+	plink --noweb --bfile $(project).Others.het-removed --extract QC/maf0.05.rsid --make-bed --out $(project).Others.common
+
+#create temporary directories for running IBD
+make-genome-dir:
+	mkdir QC/bsublog
+	mkdir QC/split-ibd
+	mkdir QC/split-ibd/results
+	mkdir QC/related
+
+# clean the temporary files if needed
+clean-genome-dir:
+	rm -f QC/split-ibd/*list*
+	rm -f QC/split-ibd/results/*bsub*
+	rm -f QC/bsublog/*bsub*
+	rm -f QC/related/*
+
+# generate the IBD files by parallelizing the IBD calculation on the cluster
+split-ibd:
+	plink --bfile $(project).EUR.common --freq --out $(project).EUR.common
+	gawk '{print $$1,$$2;}' $(project).EUR.common.fam | split -d -a 3 -l 100 - QC/split-ibd/SLEexome.EUR.common.list
+	perl $(Perlscriptsdir)/submit-bsub-call-ibd.pl -i SLEexome.EUR.common -d QC   
+
+#single step IBD
+genome:
+	plink --bfile $(project).AFR.common --genome --out $(project).AFR
+	plink --bfile $(project).ASN.common --genome --out $(project).ASN
+	plink --bfile $(project).Others.common --genome --out $(project).Others
+	
+#consolidate the results of IBD
+related:
+	cat QC/split-ibd/results/SLEexome.EUR.common.bsub*genome > $(project).EUR.genome
+	echo "FID1       IID1       FID2       IID2 RT    EZ      Z0      Z1      Z2  PI_HAT PHE       DST     PPC   RATIO" > $(project).EUR.genome.rel
+	awk '$$10 >0.1 {print}' $(project).EUR.genome | grep -Ev 'FID1' >> $(project).EUR.genome.rel
+	$(Rscriptsdir)/ibd.R -i $(project).EUR.genome.rel -o $(project).EUR.ibdplot -v 0.4 -m $(project).missing.imiss
+	echo "FID1       IID1       FID2       IID2 RT    EZ      Z0      Z1      Z2  PI_HAT PHE       DST     PPC   RATIO" > $(project).AFR.genome.rel
+	awk '$$10 >0.1 {print}' $(project).AFR.genome | grep -Ev 'FID1' >> $(project).AFR.genome.rel
+	$(Rscriptsdir)/ibd.R -i $(project).AFR.genome.rel -o $(project).AFR.ibdplot -v 0.4 -m $(project).missing.imiss
+	echo "FID1       IID1       FID2       IID2 RT    EZ      Z0      Z1      Z2  PI_HAT PHE       DST     PPC   RATIO" > $(project).ASN.genome.rel
+	awk '$$10 >0.1 {print}' $(project).ASN.genome | grep -Ev 'FID1' >> $(project).ASN.genome.rel
+	$(Rscriptsdir)/ibd.R -i $(project).ASN.genome.rel -o $(project).ASN.ibdplot -v 0.4 -m $(project).missing.imiss
+	echo "FID1       IID1       FID2       IID2 RT    EZ      Z0      Z1      Z2  PI_HAT PHE       DST     PPC   RATIO" > $(project).Others.genome.rel
+	awk '$$10 >0.1 {print}' $(project).Others.genome | grep -Ev 'FID1' >> $(project).Others.genome.rel
+	$(Rscriptsdir)/ibd.R -i $(project).Others.genome.rel -o $(project).Others.ibdplot -v 0.4 -m $(project).missing.imiss
+
+#remove contaminated samples
+# contaminated samples are those which are related to more than 15 samples
+contamination:
+	awk '/FID/ || ($$7>.4 && $$7<.8) {print $$1,$$3}' $(project).EUR.genome> QC/EUR.test.rel
+	cat QC/EUR.test.rel |awk '{for (i = 1; i <= NF; i++)freq[$$i]++}END {for (word in freq)printf "%s\t%d\n", word, freq[word] }' | sort -k2 -n > QC/EUR.test.rel.cnt
+	$(Rscriptsdir)/plot-contamination.R -i QC/EUR.test.rel.cnt -o $(project).EUR.contamination
+	cat QC/EUR.test.rel.cnt| awk '$$2>30 {print $$1,$$1;}'| grep -v "FID" > QC/EUR.contaminated-samples.txt
+	plink --bfile $(project).EUR.het-removed --remove QC/EUR.contaminated-samples.txt --make-bed --out $(project).EUR.contamination-removed
+	awk '/FID/ || ($$7>.4 && $$7<.8) {print $$1,$$3}' $(project).AFR.genome> QC/AFR.test.rel
+	cat QC/AFR.test.rel |awk '{for (i = 1; i <= NF; i++)freq[$$i]++}END {for (word in freq)printf "%s\t%d\n", word, freq[word] }' | sort -k2 -n > QC/AFR.test.rel.cnt
+	$(Rscriptsdir)/plot-contamination.R -i QC/AFR.test.rel.cnt -o $(project).AFR.contamination
+	cat QC/AFR.test.rel.cnt| awk '$$2>30 {print $$1,$$1;}'| grep -v "FID" > QC/AFR.contaminated-samples.txt
+	plink --bfile $(project).AFR.het-removed --remove QC/AFR.contaminated-samples.txt --make-bed --out $(project).AFR.contamination-removed
+	awk '/FID/ || ($$7>.4 && $$7<.8) {print $$1,$$3}' $(project).ASN.genome> QC/ASN.test.rel
+	cat QC/ASN.test.rel |awk '{for (i = 1; i <= NF; i++)freq[$$i]++}END {for (word in freq)printf "%s\t%d\n", word, freq[word] }' | sort -k2 -n > QC/ASN.test.rel.cnt
+	$(Rscriptsdir)/plot-contamination.R -i QC/ASN.test.rel.cnt -o $(project).ASN.contamination
+	cat QC/ASN.test.rel.cnt| awk '$$2>30 {print $$1,$$1;}'| grep -v "FID" > QC/ASN.contaminated-samples.txt
+	plink --bfile $(project).ASN.het-removed --remove QC/ASN.contaminated-samples.txt --make-bed --out $(project).ASN.contamination-removed
+	awk '/FID/ || ($$7>.4 && $$7<.8) {print $$1,$$3}' $(project).Others.genome> QC/Others.test.rel
+	cat QC/Others.test.rel |awk '{for (i = 1; i <= NF; i++)freq[$$i]++}END {for (word in freq)printf "%s\t%d\n", word, freq[word] }' | sort -k2 -n > QC/Others.test.rel.cnt
+	$(Rscriptsdir)/plot-contamination.R -i QC/Others.test.rel.cnt -o $(project).Others.contamination
+	cat QC/Others.test.rel.cnt| awk '$$2>30 {print $$1,$$1;}'| grep -v "FID" > QC/Others.contaminated-samples.txt
+	plink --bfile $(project).Others.het-removed --remove QC/Others.contaminated-samples.txt --make-bed --out $(project).Others.contamination-removed
+
+# remove related samples
+# duplicates, siblings, parent-offspring
+related-samp:
+	awk '!/F_MISS/ {print $$1,$$2}' $(project).EUR.ibdplot.related.removed > $(project).EUR.related.samp
+	cat $(project).EUR.genome.rel | awk '$$7<.2 && $$8 >0.9{print $$2,$$3;}'|uniq> QC/related/EUR.parent_offspring.txt
+	cat $(project).EUR.genome.rel | awk '$$7<.2 && $$8 <0.2{print $$2,$$3;}'|uniq> QC/related/EUR.duplicates.txt
+	cat $(project).EUR.genome.rel | awk '$$7>.1 && $$7<.4 && $$8 >0.2 && $$8<.7 {print $$2,$$3;}' |uniq> QC/related/EUR.siblings.txt
+	plink --bfile $(project).EUR.contamination-removed --remove $(project).EUR.related.samp --make-bed --out $(project).EUR.related-removed
+	awk '!/F_MISS/ {print $$1,$$2}' $(project).AFR.ibdplot.related.removed > $(project).AFR.related.samp
+	cat $(project).AFR.genome.rel | awk '$$7<.2 && $$8 >0.9{print $$2,$$3;}'|uniq> QC/related/AFR.parent_offspring.txt
+	cat $(project).AFR.genome.rel | awk '$$7<.2 && $$8 <0.2{print $$2,$$3;}'|uniq> QC/related/AFR.duplicates.txt
+	cat $(project).AFR.genome.rel | awk '$$7>.1 && $$7<.4 && $$8 >0.2 && $$8<.7 {print $$2,$$3;}' |uniq> QC/related/AFR.siblings.txt
+	plink --bfile $(project).AFR.contamination-removed --remove $(project).AFR.related.samp --make-bed --out $(project).AFR.related-removed
+	awk '!/F_MISS/ {print $$1,$$2}' $(project).ASN.ibdplot.related.removed > $(project).ASN.related.samp
+	cat $(project).ASN.genome.rel | awk '$$7<.2 && $$8 >0.9{print $$2,$$3;}'|uniq> QC/related/ASN.parent_offspring.txt
+	cat $(project).ASN.genome.rel | awk '$$7<.2 && $$8 <0.2{print $$2,$$3;}'|uniq> QC/related/ASN.duplicates.txt
+	cat $(project).ASN.genome.rel | awk '$$7>.1 && $$7<.4 && $$8 >0.2 && $$8<.7 {print $$2,$$3;}' |uniq> QC/related/ASN.siblings.txt
+	plink --bfile $(project).ASN.contamination-removed --remove $(project).ASN.related.samp --make-bed --out $(project).ASN.related-removed
+	awk '!/F_MISS/ {print $$1,$$2}' $(project).Others.ibdplot.related.removed > $(project).Others.related.samp
+	cat $(project).Others.genome.rel | awk '$$7<.2 && $$8 >0.9{print $$2,$$3;}'|uniq> QC/related/Others.parent_offspring.txt
+	cat $(project).Others.genome.rel | awk '$$7<.2 && $$8 <0.2{print $$2,$$3;}'|uniq> QC/related/Others.duplicates.txt
+	cat $(project).Others.genome.rel | awk '$$7>.1 && $$7<.4 && $$8 >0.2 && $$8<.7 {print $$2,$$3;}' |uniq> QC/related/Others.siblings.txt
+	plink --bfile $(project).Others.contamination-removed --remove $(project).Others.related.samp --make-bed --out $(project).Others.related-removed
+
+
+# PCA analysis: Generate Eigen vectors using  Eigenstrat
+PCA:
+	cd PCA
+	make -f Makefile-PCA cpfiles
+	make -f Makefile-PCA getCommonSNPs
+	make -f Makefile-PCA mrg
+	make -f Makefile-PCA cleanmrg
+	make -f Makefile-PCA remove-indels
+	make -f Makefile-PCA eigenstrat-par
+	make -f Makefile-PCA run-eigenstrat
+	make -f Makefile-PCA evec-covar
+	make -f Makefile-PCA plotPCA
+
+	
+#generate the minor allele frequencies of the final set of SNPs
+maf-final:
+	plink --noweb --bfile $(project).EUR.related-removed  --freq --out $(project).EUR.related-removed.maf --allow-no-sex
+	plink --noweb --bfile $(project).AFR.related-removed  --freq --out $(project).AFR.related-removed.maf --allow-no-sex
+	plink --noweb --bfile $(project).ASN.related-removed  --freq --out $(project).ASN.related-removed.maf --allow-no-sex
+	plink --noweb --bfile $(project).Others.related-removed  --freq --out $(project).Others.related-removed.maf --allow-no-sex
+	cat $(project).EUR.related-removed.maf.frq| awk '$$5==0 {print $2;}' > $(project).EUR.related-removed.monomorphic-snps.txt
+	cat $(project).AFR.related-removed.maf.frq| awk '$$5==0 {print $2;}' > $(project).AFR.related-removed.monomorphic-snps.txt
+	cat $(project).ASN.related-removed.maf.frq| awk '$$5==0 {print $2;}' > $(project).ASN.related-removed.monomorphic-snps.txt
+	cat $(project).Others.related-removed.maf.frq| awk '$$5==0 {print $2;}' > $(project).Others.related-removed.monomorphic-snps.txt
+	plink --bfile $(project).EUR.related-removed --exclude $(project).EUR.related-removed.monomorphic-snps.txt --make-bed --out $(project).EUR.related-removed.monomorphic-removed
+	plink --bfile $(project).AFR.related-removed --exclude $(project).AFR.related-removed.monomorphic-snps.txt --make-bed --out $(project).AFR.related-removed.monomorphic-removed
+	plink --bfile $(project).ASN.related-removed --exclude $(project).ASN.related-removed.monomorphic-snps.txt --make-bed --out $(project).ASN.related-removed.monomorphic-removed
+	plink --bfile $(project).Others.related-removed --exclude $(project).Others.related-removed.monomorphic-snps.txt --make-bed --out $(project).Others.related-removed.monomorphic-removed
+
+# check for deviation from Hardy-weinberg equilibrium
+hardy:
+	plink --noweb --bfile $(project).EUR.related-removed.monomorphic-removed --hardy --out $(project).EUR.hwe --allow-no-sex
+	plink --noweb --bfile $(project).AFR.related-removed.monomorphic-removed --hardy --out $(project).AFR.hwe --allow-no-sex
+	plink --noweb --bfile $(project).ASN.related-removed.monomorphic-removed --hardy --out $(project).ASN.hwe --allow-no-sex
+	plink --noweb --bfile $(project).Others.related-removed.monomorphic-removed --hardy --out $(project).Others.hwe --allow-no-sex
+
+# check for differential missingness b/w cases and controls
+test-missing:
+	plink --noweb --bfile $(project).EUR.related-removed.monomorphic-removed --test-missing --out $(project).EUR.test_missing --allow-no-sex
+	plink --noweb --bfile $(project).AFR.related-removed.monomorphic-removed --test-missing --out $(project).AFR.test_missing --allow-no-sex
+	plink --noweb --bfile $(project).ASN.related-removed.monomorphic-removed --test-missing --out $(project).ASN.test_missing --allow-no-sex
+	plink --noweb --bfile $(project).Others.related-removed.monomorphic-removed --test-missing --out $(project).Others.test_missing --allow-no-sex
+
+# find clean snps
+filter-snps:
+	$(Rscriptsdir)/filterSnps.R -h $(project).EUR.hwe.hwe -f $(project).EUR.related-removed.maf.frq -t $(project).EUR.test_missing.missing -m 0.00 -o $(project).EUR.clean.snps -d 1e-5 -c 1e-5 -n $(project).missing.lmiss -r 0.05
+	$(Rscriptsdir)/filterSnps.R -h $(project).AFR.hwe.hwe -f $(project).AFR.related-removed.maf.frq -t $(project).AFR.test_missing.missing -m 0.00 -o $(project).AFR.clean.snps -d 1e-5 -c 1e-5 -n $(project).missing.lmiss -r 0.05
+	$(Rscriptsdir)/filterSnps.R -h $(project).ASN.hwe.hwe -f $(project).ASN.related-removed.maf.frq -t $(project).ASN.test_missing.missing -m 0.00 -o $(project).ASN.clean.snps -d 1e-5 -c 1e-5 -n $(project).missing.lmiss -r 0.05
+	$(Rscriptsdir)/filterSnps.R -h $(project).Others.hwe.hwe -f $(project).Others.related-removed.maf.frq -t $(project).Others.test_missing.missing -m 0.00 -o $(project).Others.clean.snps -d 1e-5 -c 1e-5 -n $(project).missing.lmiss -r 0.05
+	
+
+# Generate final GWAS ready dataset
+gwas-ready-data:
+	plink --noweb --bfile $(project).EUR.related-removed --extract $(project).EUR.clean.snps.rsid --make-bed --out $(project).EUR.gwas-ready
+	plink --noweb --bfile $(project).AFR.related-removed --extract $(project).AFR.clean.snps.rsid --make-bed --out $(project).AFR.gwas-ready
+	plink --noweb --bfile $(project).ASN.related-removed --extract $(project).ASN.clean.snps.rsid --make-bed --out $(project).ASN.gwas-ready
+	plink --noweb --bfile $(project).Others.related-removed --extract $(project).Others.clean.snps.rsid --make-bed --out $(project).Others.gwas-ready
+
+# dataset files have covariate based on sample batch
+# Run logistic regression association testing based on additive model using significant covariates generated using PCA
+association:
+	plink --noweb --allow-no-sex --bfile $(project).EUR.gwas-ready --covar PCA/hapmap.SLEexome.signf.evec.plink.covar --logistic --ci 0.95 --out $(project).EUR.logistic
+	plink --noweb --allow-no-sex --bfile $(project).EUR.gwas-ready --assoc --ci 0.95 --out $(project).EUR.chisq
+	plink --noweb --allow-no-sex --bfile $(project).EUR.gwas-ready --hardy --nonfounders --out $(project).EUR.hwe
+	perl $(Perlscriptsdir)/mkAssocResTable.pl -l $(project).EUR.logistic.assoc.logistic -c $(project).EUR.chisq.assoc -h $(project).EUR.hwe.hwe -o $(project).EUR.assoc.results.txt
+	plink --noweb --allow-no-sex --bfile $(project).AFR.gwas-ready --covar PCA/hapmap.SLEexome.signf.evec.plink.covar --logistic --ci 0.95 --out $(project).AFR.logistic
+	plink --noweb --allow-no-sex --bfile $(project).AFR.gwas-ready --assoc --ci 0.95 --out $(project).AFR.chisq
+	plink --noweb --allow-no-sex --bfile $(project).AFR.gwas-ready --hardy --nonfounders --out $(project).AFR.hwe
+	perl $(Perlscriptsdir)/mkAssocResTable.pl -l $(project).AFR.logistic.assoc.logistic -c $(project).AFR.chisq.assoc -h $(project).AFR.hwe.hwe -o $(project).AFR.assoc.results.txt
+	plink --noweb --allow-no-sex --bfile $(project).ASN.gwas-ready --covar PCA/hapmap.SLEexome.signf.evec.plink.covar --logistic --ci 0.95 --out $(project).ASN.logistic
+	plink --noweb --allow-no-sex --bfile $(project).ASN.gwas-ready --assoc --ci 0.95 --out $(project).ASN.chisq
+	plink --noweb --allow-no-sex --bfile $(project).ASN.gwas-ready --hardy --nonfounders --out $(project).ASN.hwe
+	perl $(Perlscriptsdir)/mkAssocResTable.pl -l $(project).ASN.logistic.assoc.logistic -c $(project).ASN.chisq.assoc -h $(project).ASN.hwe.hwe -o $(project).ASN.assoc.results.txt
+	plink --noweb --allow-no-sex --bfile $(project).Others.gwas-ready --covar PCA/hapmap.SLEexome.signf.evec.plink.covar --logistic --ci 0.95 --out $(project).Others.logistic
+	plink --noweb --allow-no-sex --bfile $(project).Others.gwas-ready --assoc --ci 0.95 --out $(project).Others.chisq
+	plink --noweb --allow-no-sex --bfile $(project).Others.gwas-ready --hardy --nonfounders --out $(project).Others.hwe
+	perl $(Perlscriptsdir)/mkAssocResTable.pl -l $(project).Others.logistic.assoc.logistic -c $(project).Others.chisq.assoc -h $(project).Others.hwe.hwe -o $(project).Others.assoc.results.txt
+
+# plot GWAS results
+gwas-plots:
+	cd $(Rscriptsdir); ./gwasPlots.R -i ../../QC/$(project1).EUR.logistic.assoc.logistic     -o ../../QC/$(project1).EUR.gwasplot
+	cd $(Rscriptsdir); ./gwasPlots.R -i ../../QC/$(project1).AFR.logistic.assoc.logistic     -o ../../QC/$(project1).AFR.gwasplot
+	cd $(Rscriptsdir); ./gwasPlots.R -i ../../QC/$(project1).ASN.logistic.assoc.logistic     -o ../../QC/$(project1).ASN.gwasplot
+	cd $(Rscriptsdir); ./gwasPlots.R -i ../../QC/$(project1).Others.logistic.assoc.logistic     -o ../../QC/$(project1).Others.gwasplot

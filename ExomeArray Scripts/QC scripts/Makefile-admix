@@ -1,0 +1,47 @@
+##########################################################################################
+# Written by Arun Manoharan
+# This script calls the commands for the population stratification 
+# It calls the admixture program
+# It uses hapmap samples - European, African, Asian to identify distinct populations
+# Start in /gnet/is2/research/bioinfo/HumGenet/immuno/sle/exomearray_sle
+# To call particular headers use make -f <Makefile name> <header>
+##########################################################################################
+
+# This copies the input files
+cpfiles:
+	cp ../QC/SLEexome.missing-removed.{bed,fam} .
+	awk '{OFS="\t";$$2=sprintf("%s_%s",$$1,$$4);print}' ../QC/SLEexome.missing-removed.bim > SLEexome.bim
+	rename SLEexome.missing-removed. SLEexome. SLEexome.missing-removed.* 
+
+# get the common SNPs between our exome array samples and hapmap samples
+getCommonSNPs:
+	./getCommonSNPs.R -e SLEexome.bim -h hap.bim -o common-snps.txt
+	plink --bfile SLEexome --extract common-snps.txt --make-bed --out SLEexome.common
+	plink --bfile hap --extract common-snps.txt --make-bed --out hap.common
+
+# combine hapmap and our exome array samples
+mrg:
+	plink --noweb --bfile hap.common --bmerge SLEexome.common.{bed,bim,fam} --make-bed --out hap.SLEexome
+
+# remove SNPs with different allele codes
+cleanmrg:
+	plink --noweb --bfile hap.common --exclude hap.SLEexome.missnp --make-bed --out hap.common 
+	plink --noweb --bfile SLEexome.common --exclude hap.SLEexome.missnp --make-bed --out SLEexome.common 
+	plink --noweb --bfile hap.common --bmerge SLEexome.common.{bed,bim,fam} --make-bed --out hap.SLEexome
+
+
+# call admixture
+admix:
+	admixture --supervised hap.SLEexome.bed 3 
+
+# separate the populations
+sepPop:
+	paste hap.SLEexome.fam hap.SLEexome.3.Q > hap.SLEexome.fam.Q.txt
+	awk '$$7> 0.7 && ! /^NA/ {print $$1,$$2}' hap.SLEexome.fam.Q.txt > SLEexome.EUR.keep
+	awk '$$8> 0.7 && ! /^NA/ {print $$1,$$2}' hap.SLEexome.fam.Q.txt > SLEexome.AFR.keep
+	awk '$$9> 0.7 && ! /^NA/ {print $$1,$$2}' hap.SLEexome.fam.Q.txt > SLEexome.ASN.keep
+	awk '$$7< 0.7 && $$8 < 0.7 && $$9 < 0.7 && ! /^NA/ {print $$1,$$2}' hap.SLEexome.fam.Q.txt > SLEexome.Others.keep
+	cp SLEexome.*.keep ../QC/
+	
+	
+	

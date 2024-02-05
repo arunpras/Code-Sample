@@ -1,0 +1,74 @@
+
+##########################################################################################
+# Written by Arun Manoharan
+# This script calls the commands for the exome array that will generate
+# Eigenvectors using PCA. The software used is Eigenstrat
+# It takes in hapmap and our QCed plink genotype files and generates Eigen vectors
+# Start in /gnet/is2/research/bioinfo/HumGenet/immuno/sle/exomearray_sle
+# To call particular headers use make -f <Makefile name> <header>
+##########################################################################################
+
+#copy hapmap and sample files
+cpfiles:
+	cp ../QC/SLEexome.EUR.related-removed.{bed,fam} .
+	rename SLEexome.EUR.related-removed. SLEexome. SLEexome.EUR.related-removed.* 
+	awk '{OFS="\t";$$2=sprintf("%s_%s",$$1,$$4);print}' SLEexome.bim > SLEexome1.bim
+	awk '{OFS="\t";$$2=sprintf("%s_%s",$$1,$$4);print}' hapmap.bim > hapmap1.bim
+	mv hapmap1.bim hapmap.bim
+	mv SLEexome1.bim SLEexome.bim
+
+# pull out SNPs common to hapmap and our exome array
+getCommonSNPs:
+	./getCommonSNPs.R -e SLEexome.bim -h hapmap.bim -o common-snps.txt
+	plink --bfile SLEexome --extract common-snps.txt --make-bed --out SLEexome.common
+	plink --bfile hapmap --extract common-snps.txt --make-bed --out hapmap.common
+
+# merge hapmap and our exome array samples
+mrg:
+	plink --noweb --bfile hapmap.common --bmerge SLEexome.common.{bed,bim,fam} --make-bed --out hapmap.SLEexome
+
+# remove SNPs with different allele codes
+cleanmrg:
+	plink --noweb --bfile hapmap.common --exclude hapmap.SLEexome.missnp --make-bed --out hapmap.common 
+	plink --noweb --bfile SLEexome.common --exclude hapmap.SLEexome.missnp --make-bed --out SLEexome.common 
+	plink --noweb --bfile hapmap.common --bmerge SLEexome.common.{bed,bim,fam} --make-bed --out hapmap.SLEexome
+	plink --noweb --bfile hapmap.common --bmerge SLEexome.common.{bed,bim,fam} --recode --out hapmap.SLEexome
+
+# Remove indels from the SNPs
+remove-indels:
+	awk '$$5~/I/ || $$5~/D/ || $$6~/I/ || $$6~/D/ {print $$2}' hapmap.SLEexome.bim > hapmap.SLEexome.indels.rsid
+	plink --noweb --file  hapmap.SLEexome --exclude hapmap.SLEexome.indels.rsid --recode --out hapmap.SLEexome
+
+# Generate the Eigenstrat parameter file
+eigenstrat-par:
+	echo "genotypename:	hapmap.SLEexome.ped" > hapmap.SLEexome.par
+	echo "snpname:	hapmap.SLEexome.map" >> hapmap.SLEexome.par
+	echo "indivname:	hapmap.SLEexome.ped" >> hapmap.SLEexome.par
+	echo "evecoutname:	hapmap.SLEexome.evec" >> hapmap.SLEexome.par
+	echo "evaloutname:	hapmap.SLEexome.eval" >> hapmap.SLEexome.par
+	echo "altnormstyle:	NO" >> hapmap.SLEexome.par
+	echo "numoutevec:	20" >> hapmap.SLEexome.par
+	echo "numoutlieriter:	0" >> hapmap.SLEexome.par
+
+
+# before running eigenstrast load the module using: module load apps/eigenstrat/dev
+#  call Eigenstrat
+run-eigenstrat:
+	perl run_pca.bsub.pl -i hapmap.SLEexome -d .
+	
+# create a eigenvector covariate file for association testing
+# pull only the significant Eigen vectors
+evec-covar:
+	../scripts/R_scripts/signf.evec.R -i hapmap.SLEexome.fam -d hapmap.SLEexome.evec -o hapmap.SLEexome.signf.evec
+
+# add the dataset covariate
+evec-covar-dataset:
+	./addDataset.R -c hapmap.SLEexome.signf.evec.plink.covar -d ../starting_files/exomeChip.fam -n ../starting_files/merge.fam -o hapmap.SLEexome.signf.evec.dataset.plink.covar
+
+# plot the covariates
+plotPCA:
+	../scripts/R_scripts/plotPCAwithHapmap-new.R  -i hapmap.SLEexome.evec -o hapmap.SLEexome.PCA.png
+
+	
+	
+	

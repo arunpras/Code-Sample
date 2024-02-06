@@ -1,0 +1,78 @@
+########################################################################################################
+# Written by Arun Manoharan arun@primediscoveries.com
+# Given fastq files from a shotgun sequencing project, 
+# this script processes them to produce QC log files, functional annotations, and taxonomy assignements 
+# Results files are deposited in the shotgun_pipeline_exports directory
+########################################################################################################
+# Requirements
+#   bbmap: https://sourceforge.net/projects/bbmap/
+#   fastqc: https://www.bioinformatics.babraham.ac.uk/projects/fastqc/INSTALL.txt
+#   multiqc: http://multiqc.info/docs/
+#	metaspades: http://cab.spbu.ru/software/spades/
+
+########################################################################################################
+# Usage
+
+
+########################################################################################################
+# Quality trimming of reads with bbduk
+# 
+# https://www.biostars.org/p/247741/: bbduk uses the phred algorithm, which leaves the longest area 
+# with average quality above the limit you specify such that it cannot be extended without adding an 
+# area of average quality below the limit you specify.
+#
+# qtrimrl trimes left and right sides
+# trimq is the minimum average quality score
+
+bbduk.sh in=reads.fq out=clean.fq qtrim=rl trimq=10
+
+########################################################################################################
+# Assemble reads using metaspades
+
+# install spades
+cd /home/arun/
+wget http://cab.spbu.ru/files/release3.12.0/SPAdes-3.12.0-Linux.tar.gz
+tar -xzf SPAdes-3.12.0-Linux.tar.gz
+cd SPAdes-3.12.0-Linux/bin/
+
+# test install
+/home/arun/SPAdes-3.12.0-Linux/bin/spades.py --test
+
+########################################################################################################
+# Functional assignment of reads with FMAP (eventually use contigs for this?)
+
+mkdir fmap_hits
+mkdir fmap_abundance
+
+# install database
+perl /path to FMAP/FMAP_download.pl -m /path to diamond/diamond
+
+# for each fastq file, run FMAP mapping, save results to hits file
+for f in /path to fqs/*.fastq.gz;
+	do results="$(basename $f .fastq.gz)_hits.txt"
+	perl /path to FMAP/FMAP_mapping.pl -m /path to diamond/diamond -p 20 $f > $results;
+done
+
+# for each hits file, run FMAP quantification, save results to quantification file
+for f in /path to hits/*_hits.txt;
+	do results="$(basename $f _hits.txt)_abundance.txt"
+	perl /path to FMAP/FMAP_quantification.pl $f > $results;
+done
+
+########################################################################################################
+# Taxonomic assignement of reads with Centrifuge
+
+# download pre-built indices for bacteria and archaea
+wget ftp://ftp.ccb.jhu.edu/pub/infphilo/entrifuge/data/p_compressed.tar.gz
+tar -xvzf p_compressed.tar.gz
+
+# for each fastq file, run centrifuge to assign taxonomy, generate kracken-style report
+for f in /path the fastq/*.fastq.gz;
+	do results="$(basename $f .fastq.gz)_centrifuge.tsv"
+	/path to centrifuge/centrifuge -q -x p_compressed $f -S $results
+	centrifuge-kreport -x p_compressed $results > "(basename $f .fastq.gz)_cf_kreport.tsv";
+done
+
+
+
+

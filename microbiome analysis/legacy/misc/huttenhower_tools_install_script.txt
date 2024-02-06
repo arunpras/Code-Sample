@@ -1,0 +1,111 @@
+
+################################################################################
+# Written by Arun Manoharan 6/20/18
+# This installs the tools from the huttenhower lab 
+# and details other tool installations
+################################################################################
+https://bitbucket.org/biobakery/biobakery/wiki/Home
+https://bitbucket.org/biobakery/biobakery/wiki/metaphlan2
+https://bitbucket.org/nsegata/graphlan/wiki/Home
+https://bitbucket.org/nsegata/phylophlan/wiki/Home
+https://bitbucket.org/biobakery/biobakery/wiki/lefse
+https://bitbucket.org/biobakery/biobakery/wiki/humann2#rst-header-install-humann2
+https://bitbucket.org/biobakery/biobakery/wiki/anadama2
+https://bitbucket.org/biobakery/biobakery/wiki/maaslin
+https://bitbucket.org/biobakery/biobakery/wiki/micropita
+https://bitbucket.org/biobakery/biobakery/wiki/melonnpan
+https://bitbucket.org/biobakery/biobakery/wiki/biobakery_workflows
+https://bioconda.github.io/recipes/lefse/README.html
+
+#metaphlan2
+conda install metaphlan2 (It gets installed to /home/ubuntu/miniconda2/bin) # usage: /home/ubuntu/miniconda2/bin/metaphlan2.py 
+#graphlan
+conda install graphlan (It gets installed to /home/ubuntu/miniconda2/bin) # usage: /home/ubuntu/miniconda2/bin/graphlan.py 
+#humann2
+pip install humann2 (installed inside the conda env qiime2-2018.4) # usage: inside qiime2-2018.4 env; humann2 
+#anadama2
+pip install anadama2 (installed inside the conda env qiime2-2018.4) # usage: inside qiime2-2018.4 env; python; from anadama2 import Workflow
+#phylophlan
+cd /home/ubuntu/; wget https://bitbucket.org/nsegata/phylophlan/get/default.tar.gz (extract and the executable is inside) # usage: /home/ubuntu/nsegata-phylophlan-1d174e34b2ae/phylophlan.py
+
+
+
+#####################
+# install in linubrew env
+# things will be installed in /home/ubuntu/.linuxbrew/bin/
+#####################
+
+#install linux brew 
+# sh -c "$(curl -fsSL https://raw.githubusercontent.com/Linuxbrew/install/master/install.sh)"
+brew install numpy # usage: python; import numpy 
+brew install scipy # usage: python; import scipy 
+brew install cairo # usage: python; import cairo 
+brew install PyQt5 # usage: python; import PyQt5 
+brew install PyQt4 # usage: inside qiime1; python; import PyQt4 
+brew install pygtk # usage: python; import gi
+brew install Tkinter  # usage: python; import Tkinter --> runs fine
+
+# brew tap biobakery/biobakery
+brew install metaphlan2
+brew install biobakery/biobakery/lefse (installed in /home/ubuntu/.linuxbrew/bin/run_lefse.py) # useage: /home/ubuntu/.linuxbrew/bin/run_lefse.py
+brew install biobakery/biobakery/maaslin # usage: /home/ubuntu/.linuxbrew/Cellar/maaslin/0.0.5/bin/transpose.py input.tsv
+brew install biobakery/biobakery/micropita # usage: python /home/ubuntu/.linuxbrew/bin/MicroPITA.py
+
+brew install biobakery/biobakery/workflows # files located at: /home/ubuntu/.linuxbrew/Library/Taps/biobakery/homebrew-biobakery
+biobakery_workflows_databases --install wmgx_demo
+biobakery_workflows_databases --install wmgx
+biobakery_workflows_databases --install 16s
+
+
+git clone https://github.com/biobakery/melonnpan.git
+wget https://cran.r-project.org/src/contrib/Archive/GenABEL.data/GenABEL.data_1.0.0.tar.gz
+wget https://cran.r-project.org/src/contrib/Archive/GenABEL/GenABEL_1.8-0.tar.gz
+R CMD INSTALL GenABEL.data_1.0.0.tar.gz
+R CMD INSTALL GenABEL_1.8-0.tar.gz
+R -q -e "install.packages(c('glmnet','HDtweedie','getopt','doParallel','vegan','data.table'), repos='http://cran.r-project.org')"
+R CMD INSTALL melonnpan # usage: Rscript /home/ubuntu/melonnpan/R/melonnpan_predict.R
+
+
+/home/ubuntu/.linuxbrew/Cellar/lefse/1.0.0-dev-e3cabe9/bin/run_lefse.py
+/home/ubuntu/.linuxbrew/Cellar/lefse/1.0.0-dev-e3cabe9/libexec/bin/run_lefse.py
+/home/ubuntu/.linuxbrew/bin/run_lefse.py
+
+#pip install https://github.com/twbattaglia/koeken/zipball/master
+
+################################################################################
+
+cd /usr/share/curl/
+curl -ksO https://www.digicert.com/testroot/DigiCertHighAssuranceEVRootCA.crt
+sudo sh -c 'cp curl-ca-bundle.crt curl-ca-bundle.crt.old; cat DigiCertHighAssuranceEVRootCA.crt >> ca-bundle.crt'
+
+pip2 install --trusted-host pypi.org --trusted-host files.pythonhosted.org numpy
+
+pip2 install --trusted-host pypi.org --trusted-host files.pythonhosted.org https://github.com/twbattaglia/koeken/zipball/master
+
+################################################################################
+
+
+                macosx: no  [Mac OS-X only]
+                qt5agg: no  [PyQt5 not found]
+                qt4agg: no  [PySide not found; PyQt4 not found]
+               gtk3agg: no  [Requires pygobject to be installed.]
+             gtk3cairo: no  [Requires cairocffi or pycairo to be installed.]
+                gtkagg: no  [Requires pygtk]
+                 tkagg: no  [TKAgg requires Tkinter.]
+                 wxagg: no  [requires wxPython]
+                   gtk: no  [Requires pygtk]
+                   agg: yes [installing]
+                 cairo: no  [cairocffi or pycairo not found]
+             windowing: no  [Microsoft Windows only]
+             
+################################################################################
+
+Phyloseq R package
+
+See this forum discussion: https://stackoverflow.com/questions/15170399/changing-r-default-library-path-using-libpaths-in-rprofile-site-fails-to-work
+
+Had to add this in .bashrc to get the correct R version to run:
+alias R='/usr/bin/R'
+
+Had to add this in .bashrc to get R to search the correct directory for R packages:
+export R_LIBS_USER="/home/ubuntu/R/x86_64-pc-linux-gnu-library/3.4"

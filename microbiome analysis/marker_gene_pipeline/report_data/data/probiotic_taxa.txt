@@ -1,0 +1,6 @@
+g__Lactobacillus
+g__Bifidobacterium
+g__Akkermansia
+g__Roseburia
+g__Faecalibacterium
+g__Christensenella
